@@ -2,13 +2,14 @@
 
   .venv/bin/python dashboard.py      then open http://127.0.0.1:8050
 
-Read-only view of the paper/live account through OpenD, plus the bot's own
-logs. The only thing it can change is pause/resume (the STOP file).
+View of the paper/live account through OpenD, plus the bot's own logs.
+Controls: pause/resume (the STOP file), OpenD login and bot start/stop (controls.py).
+Only reachable on 127.0.0.1 (use an SSH tunnel), and every POST must come from
+this page, so other websites open in the same browser can't send commands.
 """
 import csv
 import datetime as dt
 import json
-import subprocess
 import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +19,8 @@ warnings.filterwarnings("ignore")
 
 import moomoo as mm
 
+import controls
+from fx import usd_myr
 from insights import Insights
 
 HERE = Path(__file__).parent
@@ -79,27 +82,8 @@ def _snapshot(ctx):
     }
 
 
-_fx = {"rate": None, "at": 0.0, "updated": None}
-
-
-def usd_myr():
-    """USD -> MYR rate from Yahoo Finance, refreshed at most hourly."""
-    import time
-    if time.time() - _fx["at"] > 3600:
-        _fx["at"] = time.time()
-        try:
-            import yfinance as yf
-            hist = yf.Ticker("MYR=X").history(period="5d")
-            _fx["rate"] = round(float(hist["Close"].iloc[-1]), 4)
-            _fx["updated"] = dt.datetime.now().strftime("%d %b %H:%M")
-        except Exception:
-            pass  # keep the last known rate
-    return {"usd_myr": _fx["rate"], "updated": _fx["updated"]}
-
-
 def bot_running():
-    out = subprocess.run(["pgrep", "-f", "bot.py --loop"], capture_output=True, text=True)
-    return bool(out.stdout.strip())
+    return controls.bot_running()
 
 
 def next_run():
@@ -123,10 +107,12 @@ def read_csv(name, limit):
 
 def status():
     log = HERE / "bot.log"
-    lines = log.read_text(errors="replace").splitlines()[-40:] if log.exists() else []
+    lines = log.read_text(errors="replace").splitlines()[-200:] if log.exists() else []
+    lines = [l for l in lines if "open_context_base" not in l and "Warning" not in l][-40:]
     return {
         "mode": CFG["mode"], "dry_run": CFG["dry_run"], "running": bot_running(),
         "risk": CFG["risk"],
+        "budget_myr": CFG.get("budget_myr"),
         "fx": usd_myr(),
         "paused": STOP_FILE.exists(), "next_run": next_run(),
         "now": dt.datetime.now().strftime("%H:%M:%S"),
@@ -149,6 +135,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/status":
             self._send(json.dumps(status(), default=str))
+        elif self.path == "/api/opend":
+            self._send(json.dumps(controls.opend_state(CFG)))
         elif self.path == "/api/watchlist":
             self._send(json.dumps(INSIGHTS.data, default=str))
         elif self.path in ("/", "/index.html"):
@@ -156,14 +144,40 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send("not found", "text/plain", 404)
 
+    def _trusted(self):
+        """Only this page may send commands: a custom header forces a CORS preflight that
+        other websites can't pass, and any Origin must be this dashboard."""
+        origin = self.headers.get("Origin")
+        allowed = {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
+        return self.headers.get("X-Go-Halal") == "1" and (origin is None or origin in allowed)
+
     def do_POST(self):
+        if not self._trusted():
+            return self._send(json.dumps({"ok": False, "message": "Forbidden"}), code=403)
+        length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            body = {}
         if self.path == "/api/pause":
             STOP_FILE.touch()
+            reply = {"ok": True, "paused": True}
         elif self.path == "/api/resume":
             STOP_FILE.unlink(missing_ok=True)
+            reply = {"ok": True, "paused": False}
+        elif self.path == "/api/opend/start":
+            reply = {"ok": True, "message": controls.opend_start()}
+        elif self.path == "/api/opend/login":
+            msg = controls.opend_login_step(str(body.get("kind", "")), str(body.get("value", "")))
+            reply = {"ok": msg == "Sent.", "message": msg}
+        elif self.path == "/api/bot/start":
+            ok, msg = controls.bot_start(CFG, str(body.get("pin", "")))
+            reply = {"ok": ok, "message": msg}
+        elif self.path == "/api/bot/stop":
+            reply = {"ok": controls.bot_stop(), "message": "Bot stopped."}
         else:
             return self._send("not found", "text/plain", 404)
-        self._send(json.dumps({"paused": STOP_FILE.exists()}))
+        self._send(json.dumps(reply))
 
     def log_message(self, *args):
         pass

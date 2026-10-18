@@ -83,6 +83,16 @@
   .chartwrap svg { height: 300px; }
   .tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); white-space: nowrap; display: none; font-variant-numeric: tabular-nums; }
   .axis { fill: var(--muted); font-size: 11px; }
+
+  .controls { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .ctl h3 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .row input { flex: 1 1 140px; min-width: 0; font: inherit; padding: 7px 10px; border: 1px solid var(--line);
+               border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .console { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--line);
+             border-radius: 8px; padding: 8px 10px; max-height: 190px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
+  .msg { font-size: 12px; margin-top: 6px; min-height: 1.2em; }
+  .help { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
 </style>
 </head>
 <body>
@@ -101,10 +111,50 @@
 
   <div id="error"></div>
 
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="controls">
+      <div class="ctl">
+        <h3>1 · moomoo OpenD <span class="pill" id="od-pill">checking…</span></h3>
+        <p class="help" id="od-help"></p>
+        <div class="console" id="od-console" aria-live="polite"></div>
+        <button id="od-start" style="margin-top:8px">Start OpenD</button>
+        <form class="row" id="od-account" autocomplete="off" hidden>
+          <input id="od-account-input" placeholder="moomoo ID" aria-label="moomoo ID">
+          <button type="submit">Send ID</button>
+        </form>
+        <form class="row" id="od-password" autocomplete="off" hidden>
+          <input id="od-password-input" type="password" placeholder="moomoo password" aria-label="moomoo password" autocomplete="off">
+          <button type="submit">Log in</button>
+        </form>
+        <div class="row" id="od-sms-row" hidden>
+          <button id="od-sms">Send me an SMS code</button>
+          <form class="row" id="od-code" autocomplete="off" style="margin:0;flex:1">
+            <input id="od-code-input" inputmode="numeric" placeholder="SMS code" aria-label="SMS code">
+            <button type="submit">Submit code</button>
+          </form>
+        </div>
+        <div class="msg" id="od-msg"></div>
+      </div>
+      <div class="ctl">
+        <h3>2 · Trading bot <span class="pill" id="bot-pill">checking…</span></h3>
+        <p class="help" id="bot-help"></p>
+        <form class="row" id="bot-form" autocomplete="off">
+          <input id="bot-pin" type="password" inputmode="numeric" placeholder="Trading PIN" aria-label="moomoo trading PIN" autocomplete="off">
+          <button type="submit" id="bot-start">Start bot</button>
+          <button type="button" class="danger" id="bot-stop">Stop bot</button>
+        </form>
+        <div class="msg" id="bot-msg"></div>
+      </div>
+    </div>
+  </div>
+
+
   <div class="grid">
     <div class="card"><div class="kpi-label">Account value</div><div class="kpi" id="k-total">–</div><div class="sub" id="s-total"></div></div>
     <div class="card"><div class="kpi-label">Cash</div><div class="kpi" id="k-cash">–</div><div class="sub" id="s-cash"></div></div>
     <div class="card"><div class="kpi-label">Invested</div><div class="kpi" id="k-mv">–</div><div class="sub" id="s-mv"></div></div>
+    <div class="card" id="budget-card" hidden><div class="kpi-label">Bot budget</div><div class="kpi" id="k-budget">–</div><div class="sub" id="s-budget"></div></div>
     <div class="card"><div class="kpi-label">Unrealized profit / loss</div><div class="kpi" id="k-pl">–</div><div class="sub" id="s-pl"></div></div>
   </div>
 
@@ -169,6 +219,7 @@ async function refresh() {
   try { s = await (await fetch("/api/status")).json(); }
   catch { $("error").innerHTML = `<div class="error">Dashboard server isn't responding.</div>`; return; }
   paused = s.paused;
+  renderBotControls(s);
   lastTrades = s.trades || [];
   if (s.risk) CFG = s.risk;
 
@@ -192,6 +243,12 @@ async function refresh() {
   $("fx").textContent = RATE ? `USD 1 = RM ${RATE.toFixed(3)}` : "";
   $("fx").title = RATE ? `Rate from Yahoo Finance, ${s.fx.updated}. US stocks trade in USD; RM figures are converted for display.` : "";
   document.querySelectorAll(".seg button").forEach(b => b.classList.toggle("on", b.dataset.cur === (inRM() ? "MYR" : "USD")));
+  $("budget-card").hidden = !(s.budget_myr && RATE && b.account);
+  if (s.budget_myr && RATE && b.account) {
+    const budgetUsd = s.budget_myr / RATE, left = Math.max(budgetUsd - (b.account.market_val || 0), 0);
+    $("k-budget").textContent = money(budgetUsd, 0);
+    $("s-budget").textContent = `${money(left)} left to invest · the bot ignores money above this`;
+  }
   if (b.account) {
     const a = b.account, other = v => inRM() ? usd(v) : "";
     $("k-total").textContent = money(a.total_assets); $("s-total").textContent = other(a.total_assets);
@@ -241,7 +298,7 @@ document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
 });
 $("toggle").onclick = async () => {
   if (!paused && !confirm("Pause the bot? It will skip its daily passes until you resume.")) return;
-  await fetch(paused ? "/api/resume" : "/api/pause", {method: "POST"});
+  await post(paused ? "/api/resume" : "/api/pause");
   refresh();
 };
 
@@ -382,6 +439,70 @@ async function refreshWatchlist() {
 }
 refreshWatchlist();
 setInterval(refreshWatchlist, 60000);
+
+// ---------- Controls ----------
+const post = async (path, body = {}) => {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Go-Halal": "1"}, body: JSON.stringify(body)});
+  try { return await r.json(); } catch { return {ok: false, message: "No response"}; }
+};
+let OD = null, LIVE = false, RUNNING = false;
+
+async function refreshOpenD() {
+  try { OD = await (await fetch("/api/opend")).json(); } catch { return; }
+  const last = (OD.console.filter(l => l.trim() !== ">>>").slice(-1)[0] || "").toLowerCase();
+  const askAccount = OD.session && !OD.logged_in && last.includes("account");
+  const askPassword = OD.session && !OD.logged_in && last.includes("password");
+  const askSms = OD.session && !OD.logged_in && /verif|sms/.test(OD.console.slice(-4).join(" ").toLowerCase());
+  const [cls, label] = OD.logged_in ? ["ok", "Logged in"] : OD.session ? ["warn", "Waiting for login"] : ["bad", "Not running"];
+  $("od-pill").className = "pill " + cls; $("od-pill").textContent = label;
+  $("od-help").textContent = OD.logged_in ? "OpenD is connected to moomoo. Nothing to do here."
+    : askAccount ? "Enter your moomoo ID." : askPassword ? "Enter your moomoo password." : askSms ? "moomoo wants an SMS code: request one, then submit it."
+    : OD.session ? "Waiting for OpenD…" : "Press Start OpenD, then log in with your moomoo ID and password.";
+  $("od-console").textContent = OD.console.join("\n") || "(no output yet)";
+  $("od-console").scrollTop = 1e9;
+  $("od-start").hidden = OD.session;
+  $("od-account").hidden = !askAccount;
+  $("od-password").hidden = !askPassword;
+  $("od-sms-row").hidden = !askSms;
+}
+
+function renderBotControls(s) {
+  LIVE = s.mode === "live"; RUNNING = s.running;
+  $("bot-pill").className = "pill " + (RUNNING ? "ok" : "bad");
+  $("bot-pill").textContent = RUNNING ? (LIVE ? "Running · LIVE" : "Running · paper") : "Stopped";
+  $("bot-help").textContent = RUNNING ? `Trades once a day at ${s.next_run.split(", ")[1] || "10:00 PM"} Malaysia time. Stop it any time.`
+    : LIVE ? "Live mode uses real money. Enter your trading PIN to unlock trading and start." : "Paper mode: no PIN needed.";
+  $("bot-pin").hidden = RUNNING || !LIVE;
+  $("bot-start").hidden = RUNNING;
+  $("bot-stop").hidden = !RUNNING;
+  $("bot-start").textContent = LIVE ? "Start live trading" : "Start bot";
+}
+
+const odStep = async (kind, value = "") => {
+  $("od-msg").textContent = "Sending…";
+  $("od-msg").textContent = (await post("/api/opend/login", {kind, value})).message;
+  refreshOpenD();
+};
+$("od-start").onclick = async () => { $("od-msg").textContent = "Starting…"; $("od-msg").textContent = (await post("/api/opend/start")).message; refreshOpenD(); };
+$("od-account").onsubmit = e => { e.preventDefault(); const v = $("od-account-input").value.trim(); $("od-account-input").value = ""; if (v) odStep("account", v); };
+$("od-password").onsubmit = e => { e.preventDefault(); const v = $("od-password-input").value; $("od-password-input").value = ""; if (v) odStep("password", v); };
+$("od-sms").onclick = () => odStep("sms_request");
+$("od-code").onsubmit = e => { e.preventDefault(); const c = $("od-code-input").value.replace(/\D/g, ""); $("od-code-input").value = ""; if (c) odStep("sms_code", c); };
+$("bot-form").onsubmit = async e => {
+  e.preventDefault();
+  const pin = $("bot-pin").value;
+  if (LIVE && !pin) { $("bot-msg").textContent = "Enter your trading PIN."; return; }
+  if (LIVE && !confirm("Start trading with REAL money?")) return;
+  $("bot-pin").value = ""; $("bot-msg").textContent = "Starting… (about 10 seconds)";
+  const r = await post("/api/bot/start", {pin});
+  $("bot-msg").innerHTML = `<span class="${r.ok ? "pos" : "neg"}">${esc(r.message)}</span>`; refresh();
+};
+$("bot-stop").onclick = async () => {
+  if (!confirm("Stop the bot? It won't trade until you start it again.")) return;
+  const r = await post("/api/bot/stop"); $("bot-msg").textContent = r.message; refresh();
+};
+refreshOpenD();
+setInterval(refreshOpenD, 5000);
 
 refresh();
 setInterval(refresh, 15000);
