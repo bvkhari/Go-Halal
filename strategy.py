@@ -42,10 +42,28 @@ def signal(closes, p: Params, cost_price=None):
     return "HOLD" if in_trend else "SELL"
 
 
-def position_size(price, equity, cash, max_position_pct, cash_buffer_pct):
-    """Whole shares to buy, using cash only (never borrowed money)."""
+def position_size(price, equity, cash, max_position_pct, cash_buffer_pct, fractional=False, min_order=0.0):
+    """Shares to buy, using cash only (never borrowed money).
+
+    Whole shares by default; with fractional=True, down to 0.0001 share, as long
+    as the order is worth at least min_order (moomoo's fractional minimum is US$5).
+    """
+    if price <= 0:
+        return 0
     budget = min(equity * max_position_pct, cash - equity * cash_buffer_pct)
-    return max(int(budget // price), 0) if price > 0 else 0
+    if budget < min_order:
+        return 0
+    if fractional:
+        return max(int(budget / price * 10_000) / 10_000, 0)
+    return max(int(budget // price), 0)
+
+
+def bot_capital(equity, cash, invested, budget_usd=None):
+    """Equity and cash the bot may use. With a budget, it acts as if the account
+    held only that much, even when the real account holds more."""
+    if budget_usd is None:
+        return equity, cash
+    return min(equity, budget_usd), min(cash, max(budget_usd - invested, 0))
 
 
 def backtest(closes, p: Params, start_cash=10_000.0):

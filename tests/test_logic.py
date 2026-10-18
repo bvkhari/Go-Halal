@@ -1,7 +1,7 @@
 import unittest
 
 from screener import check_business, check_ratios, purification_amount
-from strategy import Params, backtest, position_size, signal
+from strategy import Params, backtest, bot_capital, position_size, signal
 
 P = Params(fast=2, slow=3, trend=5, stop_loss_pct=0.08)
 
@@ -26,6 +26,22 @@ class Strategy(unittest.TestCase):
         # 10% of 10k = 1000 budget, but only 300 cash minus 500 buffer -> buy nothing
         self.assertEqual(position_size(50, 10_000, 300, 0.10, 0.05), 0)
         self.assertEqual(position_size(50, 10_000, 10_000, 0.10, 0.05), 20)
+
+    def test_fractional_shares_for_small_budget(self):
+        # RM500 ~ $122.58: 10% = $12.26 per stock, MSFT at $530 -> 0.0231 share
+        self.assertEqual(position_size(530, 122.58, 122.58, 0.10, 0.05, fractional=True, min_order=5), 0.0231)
+        # whole shares only: can't afford even one
+        self.assertEqual(position_size(530, 122.58, 122.58, 0.10, 0.05), 0)
+
+    def test_below_minimum_order_buys_nothing(self):
+        # $40 account: 10% = $4 < $5 fractional minimum
+        self.assertEqual(position_size(100, 40, 40, 0.10, 0.05, fractional=True, min_order=5), 0)
+
+    def test_budget_caps_a_bigger_account(self):
+        # paper account holds $1M but the budget is $122.58, $50 already invested
+        self.assertEqual(bot_capital(1_000_000, 1_000_000, 50, 122.58), (122.58, 72.58))
+        self.assertEqual(bot_capital(1_000_000, 1_000_000, 200, 122.58), (122.58, 0))
+        self.assertEqual(bot_capital(1000, 500, 0, None), (1000, 500))
 
     def test_backtest_runs(self):
         final, trades, _ = backtest([float(x) for x in range(1, 50)], P)

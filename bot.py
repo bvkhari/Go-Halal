@@ -21,7 +21,8 @@ warnings.filterwarnings("ignore")
 import moomoo as mm
 
 import screener
-from strategy import Params, position_size, signal
+from fx import usd_myr
+from strategy import Params, bot_capital, position_size, signal
 
 HERE = Path(__file__).parent
 STATE_FILE = HERE / "state.json"
@@ -62,8 +63,12 @@ class Bot:
         self.env = mm.TrdEnv.REAL if self.live else mm.TrdEnv.SIMULATE
         self.state = load_json(STATE_FILE, {})
 
+        password = os.environ.get("MOOMOO_TRADE_PASSWORD")
+        # Check before connecting: an open OpenD connection keeps the process alive after sys.exit.
         if self.live and not cfg.get("i_understand_live_trading_uses_real_money"):
             sys.exit("mode is 'live' but i_understand_live_trading_uses_real_money is false. Refusing to start.")
+        if self.live and not password:
+            sys.exit("Live mode needs your trading password in the MOOMOO_TRADE_PASSWORD environment variable.")
 
         host, port = cfg["opend_host"], cfg["opend_port"]
         self.quote = mm.OpenQuoteContext(host=host, port=port)
@@ -72,11 +77,9 @@ class Bot:
             security_firm=getattr(mm.SecurityFirm, cfg["security_firm"]),
         )
         if self.live:
-            password = os.environ.get("MOOMOO_TRADE_PASSWORD")
-            if not password:
-                sys.exit("Live mode needs your trading password in the MOOMOO_TRADE_PASSWORD environment variable.")
             ret, data = self.trade.unlock_trade(password)
             if ret != mm.RET_OK:
+                self.close()
                 sys.exit(f"unlock_trade failed: {data}")
         log(f"Connected to OpenD  mode={'LIVE (real money)' if self.live else 'PAPER'}  dry_run={cfg['dry_run']}")
 
@@ -117,7 +120,13 @@ class Bot:
         if ret != mm.RET_OK:
             raise RuntimeError(f"accinfo_query failed: {data}")
         row = data.iloc[0]
-        return float(row["total_assets"]), float(row["cash"])
+        # "cash" adds up every currency converted to USD. Buying US stocks with RM still in
+        # the account would make moomoo lend USD (interest = riba), so spend only real USD cash.
+        try:
+            usd_cash = float(row["us_cash"])
+        except (KeyError, TypeError, ValueError):  # paper accounts report N/A
+            usd_cash = float(row["cash"])
+        return float(row["total_assets"]), usd_cash
 
     def positions(self):
         ret, data = self.trade.position_list_query(trd_env=self.env, refresh_cache=True)
@@ -176,6 +185,21 @@ class Bot:
         prices = self.last_prices(sorted(set(watch) | set(held)))
         log(f"Equity {equity:,.2f}  cash {cash:,.2f}  positions {len(held)}")
 
+        # Optional budget: the bot behaves as if the account held only budget_myr.
+        budget_usd = None
+        if self.cfg.get("budget_myr"):
+            rate = usd_myr()["usd_myr"]
+            if not rate:
+                log("Budget set but no USD/MYR rate available: no new buys this pass.")
+                buying_allowed = False
+            else:
+                budget_usd = self.cfg["budget_myr"] / rate
+        invested = sum(float(p.market_val) for p in held.values())
+        equity, cash = bot_capital(equity, cash, invested, budget_usd)
+        if budget_usd:
+            log(f"Budget RM{self.cfg['budget_myr']:,.0f} = ${budget_usd:,.2f}: "
+                f"bot equity {equity:,.2f}, cash it may spend {cash:,.2f}")
+
         # 1. Exits, including divesting anything that is no longer Shariah compliant.
         for code, pos in held.items():
             if code in busy:
@@ -192,7 +216,7 @@ class Bot:
                 if action != "SELL":
                     continue
                 reason = "exit signal / stop loss"
-            qty = int(pos.can_sell_qty)  # never sell more than we own: no short selling
+            qty = int(float(pos.can_sell_qty) * 10_000) / 10_000  # never more than we own: no short selling
             if qty > 0:
                 self.order("SELL", code, qty, price, reason)
 
@@ -215,8 +239,10 @@ class Bot:
                 log(f"skip {code}: " + "; ".join(check.reasons))
                 continue
             price = prices[code]
-            qty = position_size(price, equity, cash, self.risk["max_position_pct"], self.risk["cash_buffer_pct"])
-            if qty < 1:
+            qty = position_size(price, equity, cash, self.risk["max_position_pct"], self.risk["cash_buffer_pct"],
+                                fractional=self.cfg.get("fractional", False),
+                                min_order=self.risk.get("min_order_usd", 0))
+            if qty <= 0:
                 log(f"skip {code}: not enough cash")
                 continue
             self.order("BUY", code, qty, price, "trend entry")
