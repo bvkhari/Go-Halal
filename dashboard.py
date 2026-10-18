@@ -79,6 +79,24 @@ def _snapshot(ctx):
     }
 
 
+_fx = {"rate": None, "at": 0.0, "updated": None}
+
+
+def usd_myr():
+    """USD -> MYR rate from Yahoo Finance, refreshed at most hourly."""
+    import time
+    if time.time() - _fx["at"] > 3600:
+        _fx["at"] = time.time()
+        try:
+            import yfinance as yf
+            hist = yf.Ticker("MYR=X").history(period="5d")
+            _fx["rate"] = round(float(hist["Close"].iloc[-1]), 4)
+            _fx["updated"] = dt.datetime.now().strftime("%d %b %H:%M")
+        except Exception:
+            pass  # keep the last known rate
+    return {"usd_myr": _fx["rate"], "updated": _fx["updated"]}
+
+
 def bot_running():
     out = subprocess.run(["pgrep", "-f", "bot.py --loop"], capture_output=True, text=True)
     return bool(out.stdout.strip())
@@ -109,6 +127,7 @@ def status():
     return {
         "mode": CFG["mode"], "dry_run": CFG["dry_run"], "running": bot_running(),
         "risk": CFG["risk"],
+        "fx": usd_myr(),
         "paused": STOP_FILE.exists(), "next_run": next_run(),
         "now": dt.datetime.now().strftime("%H:%M:%S"),
         "broker": broker_snapshot(),
