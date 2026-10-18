@@ -93,6 +93,18 @@
              border-radius: 8px; padding: 8px 10px; max-height: 190px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
   .msg { font-size: 12px; margin-top: 6px; min-height: 1.2em; }
   .help { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+
+  .holdings { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .hold { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .hold .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .hold .name { color: var(--muted); font-size: 12px; }
+  .hold .val { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 6px; }
+  .hold dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 8px 0 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .hold dt { color: var(--muted); } .hold dd { margin: 0; text-align: right; }
+  .hold svg { height: 40px; margin-top: 8px; }
+  .share { height: 6px; border-radius: 3px; background: var(--line); margin-top: 8px; overflow: hidden; }
+  .share i { display: block; height: 100%; background: var(--s1); border-radius: 3px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -160,6 +172,10 @@
 
 
   <div class="card">
+    <h2>My holdings <span class="meta" id="hold-sum"></span></h2>
+    <div class="holdings" id="positions"></div>
+  </div>
+  <div class="card">
     <h2>How the bot decides <span class="meta" id="wl-updated"></span></h2>
     <div class="pipeline" id="pipeline"><div class="empty">Working out today's decisions… this takes about a minute after the dashboard starts.</div></div>
     <div class="rules" id="rules"></div>
@@ -172,7 +188,6 @@
     <svg id="equity" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
   </div>
 
-  <div class="card"><h2>Holdings</h2><div class="scroll" id="positions"></div></div>
   <div class="card"><h2>Today's orders at moomoo</h2><div class="scroll" id="orders"></div></div>
   <div class="card"><h2>Bot decisions</h2><div class="scroll" id="trades"></div></div>
   <div class="card"><h2>Bot log</h2><div class="log" id="log"></div></div>
@@ -256,16 +271,9 @@ async function refresh() {
     $("k-mv").textContent = money(a.market_val);     $("s-mv").textContent = other(a.market_val);
     $("k-pl").innerHTML = signed(a.unrealized_pl);   $("s-pl").textContent = a.unrealized_pl == null ? "" : other(a.unrealized_pl);
   }
-  $("positions").innerHTML = table(b.positions || [], [
-    {key: "code", label: "Stock", fmt: (v, r) => `<b>${esc(v.replace(/^\w+\./, ""))}</b> <span class="meta">${esc(r.stock_name)}</span>`},
-    {key: "qty", label: "Shares", num: true},
-    {key: "cost_price", label: "Avg cost", num: true, fmt: money},
-    {key: "nominal_price", label: "Price", num: true, fmt: money},
-    {key: "market_val", label: "Value", num: true, fmt: money},
-    {key: "today_pl_val", label: "Today", num: true, fmt: signed},
-    {key: "pl_val", label: "Total P/L", num: true, fmt: signed},
-    {key: "pl_ratio", label: "%", num: true, fmt: pct},
-  ], "No holdings yet. The bot buys at its next pass.");
+  LAST_POSITIONS = b.positions || [];
+  LAST_TOTAL = b.account ? b.account.total_assets : null;
+  renderHoldings();
   $("orders").innerHTML = table(b.orders || [], [
     {key: "create_time", label: "Time", fmt: when},
     {key: "trd_side", label: "Side"},
@@ -435,7 +443,7 @@ function drawBig(st) {
 
 let CFG = {max_position_pct: 0.1, max_open_positions: 8};
 async function refreshWatchlist() {
-  try { WL = await (await fetch("/api/watchlist")).json(); renderWatchlist(); } catch {}
+  try { WL = await (await fetch("/api/watchlist")).json(); renderWatchlist(); renderHoldings(); } catch {}
 }
 refreshWatchlist();
 setInterval(refreshWatchlist, 60000);
@@ -518,6 +526,48 @@ $("bot-stop").onclick = async () => {
 };
 refreshOpenD();
 setInterval(refreshOpenD, 5000);
+
+// ---------- My holdings ----------
+let LAST_POSITIONS = [], LAST_TOTAL = null;
+function renderHoldings() {
+  const P = LAST_POSITIONS, total = LAST_TOTAL;
+  if (!P.length) {
+    $("hold-sum").textContent = "";
+    $("positions").innerHTML = `<div class="empty">You don't hold any stocks yet. The bot buys at its next pass once there's USD cash in the account.</div>`;
+    return;
+  }
+  const value = P.reduce((a, p) => a + (+p.market_val || 0), 0);
+  $("hold-sum").textContent = `· ${P.length} stock${P.length > 1 ? "s" : ""} worth ${money(value)}`;
+  $("positions").innerHTML = [...P].sort((a, b) => b.market_val - a.market_val).map(p => {
+    const st = WL && WL.stocks ? WL.stocks.find(s => s.code === p.code) : null;
+    const free = !(+p.cost_price > 0);
+    const share = total ? Math.min(100, (p.market_val / total) * 100) : null;
+    const plPct = free ? null : (+p.nominal_price / +p.cost_price - 1) * 100;
+    const verdict = st ? (st.action === "SELL" ? ["bad", "Bot will sell"] : ["ok", "Bot keeps holding"]) : null;
+    const halal = st ? (st.compliant ? ["ok", "Shariah ✓"] : ["bad", "Fails Shariah screen"]) : null;
+    const qty = (+p.qty).toLocaleString(undefined, {maximumFractionDigits: 4});
+    return `<div class="hold">
+      <div class="top"><b>${esc(p.code.replace(/^\w+\./, ""))}</b><span class="name">${esc(p.stock_name)}</span></div>
+      <div class="val">${money(p.market_val)}</div>
+      <div class="sub">${inRM() ? usd(p.market_val) : ""}</div>
+      <div class="badges">
+        ${halal ? `<span class="pill ${halal[0]}">${halal[1]}</span>` : ""}
+        ${verdict ? `<span class="pill ${verdict[0]}">${verdict[1]}</span>` : ""}
+        ${free ? `<span class="pill">Free share</span>` : ""}
+      </div>
+      ${st ? spark(st) : ""}
+      <dl>
+        <dt>Shares</dt><dd>${qty}</dd>
+        <dt>Price</dt><dd>${money(p.nominal_price)}</dd>
+        <dt>Cost per share</dt><dd>${free ? "Free (no cost)" : money(p.cost_price)}</dd>
+        <dt>Profit / loss</dt><dd>${signed(p.pl_val)}${plPct == null ? "" : ` (${pct(plPct)})`}</dd>
+        <dt>Today</dt><dd>${signed(p.today_pl_val)}</dd>
+      </dl>
+      ${share == null ? "" : `<div class="share" title="${share.toFixed(1)}% of your account"><i style="width:${share}%"></i></div>
+      <div class="sub">${share.toFixed(1)}% of your account</div>`}
+    </div>`;
+  }).join("");
+}
 
 refresh();
 setInterval(refresh, 15000);
