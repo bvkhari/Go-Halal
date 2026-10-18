@@ -81,6 +81,21 @@ It trades once every weekday at 10:00 New York time (10 PM in Malaysia). Every o
 ```
 then open <http://127.0.0.1:8050>. It shows account value, holdings with profit/loss, today's orders, every bot decision and the live log, refreshing every 15 seconds. The **Pause bot** button creates the `STOP` file for you. It is only reachable from this Mac.
 
+## Running on a server (SovernStack)
+
+The bot can run 24/7 on a SovernStack SSH session (Ubuntu 22.04, CPU, 4 GB) instead of your Mac.
+- Code lives in `/opt/go-halal` on the server, and OpenD (Linux command-line build) in `/opt/opend`.
+- Each program runs in its own `tmux` session: `opend`, `bot` and `dashboard`. List them with `tmux ls`, and watch one with `tmux attach -t bot` (press Ctrl+B then D to leave it running).
+- **Log in to OpenD:** `tmux new -A -s opend /opt/go-halal/server/opend-login.sh`. Type your moomoo ID and password. If it asks for an SMS code, run `req_phone_verify_code`, then `input_phone_verify_code -code=<code>`.
+- **Start the bot and dashboard:** `/opt/go-halal/server/start.sh`.
+- **View the dashboard from your Mac:**
+  ```bash
+  ssh -N -L 8050:127.0.0.1:8050 -i ~/.ssh/go-halal-bot.pem -p 8901 root@kl.sovernstack.com
+  ```
+  then open <http://127.0.0.1:8050>.
+- If the session restarts, log in to OpenD again, then run `start.sh`.
+- Never run the bot on your Mac and on the server at the same time. Both would place orders on the same account.
+
 ## 4. Going live (real money)
 
 Only do this after weeks of paper trading you're happy with.

@@ -1,3 +1,4 @@
 moomoo-api
 yfinance
 pandas
+tzdata
