@@ -98,16 +98,28 @@ The bot can run 24/7 on a SovernStack SSH session (Ubuntu 22.04, CPU, 4 GB) inst
 
 ## 4. Going live (real money)
 
-Only do this after weeks of paper trading you're happy with.
-1. In `config.json`, set `"mode": "live"` **and** `"i_understand_live_trading_uses_real_money": true`.
-2. Start the bot with your trading password in an environment variable. The password is never saved in a file:
-   ```bash
-   MOOMOO_TRADE_PASSWORD='your-trading-pin' .venv/bin/python bot.py --loop
-   ```
+With `"fractional": true`, the bot buys fractional US shares from US$5 per order, so it works with small accounts such as RM500. To make it ignore money above a set amount, set `"budget_myr"` to that amount. `null` means the whole account.
+
+1. **Fund it without borrowing.** Deposit the RM, then use **Currency Exchange** in the moomoo app to turn it into **USD**. The bot only spends real USD cash, so RM left unconverted is ignored. This stops the margin account from lending USD, which would be charged interest (riba).
+2. In `config.json`, set `"mode": "live"` and `"i_understand_live_trading_uses_real_money": true`.
+3. **Start it from the dashboard:**
+   - Under **Controls**, log in to OpenD: your moomoo ID, your password, and an SMS code if asked.
+   - Enter your trading PIN and press **Start live trading**.
+
+   The PIN goes straight to the bot process and is never saved. You can also start the bot with `server/go-live.sh` in a terminal.
+4. **Stop it any time** with **Stop bot**, or **Pause bot** to skip passes. The bot can't restart itself in live mode, because it never stores your PIN.
+
+The dashboard only accepts commands from its own page, and only through your SSH tunnel. Its OpenD box can send login answers and SMS codes, nothing else.
+
+Costs: fractional orders (under 1 share) pay no commission and a platform fee of 0.99% of the order amount, capped at US$0.99. Malaysian stamp duty also applies. Check the current fees in the moomoo app.
 
 ## Files
 - `bot.py`: connects to OpenD and runs the daily pass: sells first, then buys.
 - `strategy.py`: buy/sell rules, position sizing and the backtest.
 - `screener.py`: Shariah screen and purification calculator.
 - `dashboard.py` + `dashboard.html`: local web dashboard.
+- `fx.py`: USD/MYR exchange rate.
+- `controls.py`: dashboard controls (OpenD login, start/stop bot).
+- `insights.py`: the "How the bot decides" data for the dashboard.
+- `server/`: scripts for running on SovernStack (`opend-login.sh`, `start.sh`, `go-live.sh`).
 - `config.json`: all settings.

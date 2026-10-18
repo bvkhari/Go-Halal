@@ -1,13 +1,15 @@
 {
-  "mode": "paper",
+  "mode": "live",
   "dry_run": false,
-  "i_understand_live_trading_uses_real_money": false,
+  "i_understand_live_trading_uses_real_money": true,
 
   "opend_host": "127.0.0.1",
   "opend_port": 11111,
   "security_firm": "FUTUMY",
   "market": "US",
   "currency": "USD",
+  "budget_myr": null,
+  "fractional": true,
 
   "watchlist": [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AVGO", "ADBE", "CSCO", "COST",
@@ -22,7 +24,8 @@
     "max_open_positions": 8,
     "cash_buffer_pct": 0.05,
     "max_daily_loss_pct": 0.05,
-    "limit_price_slippage_pct": 0.005
+    "limit_price_slippage_pct": 0.005,
+    "min_order_usd": 5
   },
 
   "run_time_new_york": "10:00"
