@@ -1,0 +1,29 @@
+{
+  "mode": "paper",
+  "dry_run": false,
+  "i_understand_live_trading_uses_real_money": false,
+
+  "opend_host": "127.0.0.1",
+  "opend_port": 11111,
+  "security_firm": "FUTUMY",
+  "market": "US",
+  "currency": "USD",
+
+  "watchlist": [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AVGO", "ADBE", "CSCO", "COST",
+    "JNJ", "PG", "KO", "PEP", "LLY", "ABBV", "TSLA", "AMD", "QCOM", "TXN",
+    "SPUS", "HLAL"
+  ],
+
+  "strategy": { "fast": 20, "slow": 50, "trend": 200, "stop_loss_pct": 0.08 },
+
+  "risk": {
+    "max_position_pct": 0.10,
+    "max_open_positions": 8,
+    "cash_buffer_pct": 0.05,
+    "max_daily_loss_pct": 0.05,
+    "limit_price_slippage_pct": 0.005
+  },
+
+  "run_time_new_york": "10:00"
+}

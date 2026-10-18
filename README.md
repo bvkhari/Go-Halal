@@ -1,0 +1,91 @@
+# Halal moomoo trading bot
+
+A bot that trades Shariah-compliant US stocks on moomoo, on its own. It starts in **paper trading** (simulated money).
+
+> I'm not a scholar or a financial advisor. The rules below follow mainstream AAOIFI-style screening. Ask a qualified scholar to confirm them for your own situation.
+
+---
+
+## 1. What makes this bot halal
+
+| Rule | How the bot follows it |
+|---|---|
+| **No riba (interest)** | No margin. It buys only with cash it already has and keeps a 5% cash buffer. |
+| **No selling what you don't own** | No short selling. It never sells more than the shares it holds (`can_sell_qty`). |
+| **No gharar / maysir (excessive uncertainty / gambling)** | No options, futures or CFDs. It buys only shares, plus Shariah-labelled ETFs. |
+| **Halal business** | It skips banks, conventional insurance and finance, alcohol, tobacco, gambling, adult content, cannabis and pork. Defense, entertainment and hotels are scholar-debated, so it blocks them by default. |
+| **AAOIFI financial ratios** | Interest-bearing debt < 30% of market cap. Cash and interest-bearing securities < 30% of market cap. Interest income < 5% of revenue. |
+| **Divest when a stock fails** | It re-screens every holding on every run and sells any stock that becomes non-compliant. |
+| **Day trading (disputed)** | It runs once a day on daily candles and never buys and sells on the same day. This also respects the stricter view that you should own the shares before you sell them. |
+| **Purification** | `screener.purification_amount(dividends, ratio)` tells you how much of your dividends to give to charity. |
+
+The screener is a first pass, using free Yahoo Finance data. If it lacks data for a stock, the stock fails. Before you trust a stock, cross-check it with a dedicated screener such as Musaffa or Zoya, or the Securities Commission Malaysia Shariah list for Bursa stocks. Screeners use slightly different limits: AAOIFI uses 30%, while Dow Jones and S&P use about 33%.
+
+## 2. The strategy
+
+It is long-only trend following on daily candles (`strategy.py`):
+- **Buy** when the 20-day average is above the 50-day average and the price is above the 200-day average.
+- **Sell** when that trend condition breaks, or the price falls **8%** below what you paid.
+- **Limits:** at most 10% of the account per stock, at most 8 stocks, and no new buys after a 5% drop in one day. It uses limit orders only.
+
+**Honest backtest** (10 years, from $10,000, `python strategy.py`):
+
+| Stock | Strategy | Buy & hold |
+|---|---|---|
+| AAPL | $29,196 | $95,240 |
+| MSFT | $31,692 | $81,065 |
+| NVDA | $126,614 | $522,291 |
+| KO | $11,367 | $27,329 |
+| SPUS | $18,727 | $26,654 |
+
+In this bull market the strategy made money but **lost badly to simply holding**. A trend filter like this is designed to cut losses in crashes, and you pay for that by missing upside. Treat it as a safe template to improve, not a money machine.
+
+## 3. Setup (macOS)
+
+**a. Open the moomoo API**
+1. Download **OpenD** for macOS from moomoo's OpenAPI page: <https://www.moomoo.com/download/OpenAPI>.
+2. Extract the file and run the installer. Open **OpenD** and log in with your moomoo ID and password.
+3. On first login, finish the **API questionnaire and agreement**.
+4. Leave the API port at **11111** and keep OpenD running whenever the bot runs.
+5. In the moomoo app, open the **paper trading** account (Paper Trade, US stocks).
+
+**b. Install the bot**
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+**c. Check things work**
+```bash
+.venv/bin/python screener.py AAPL JPM SPUS
+```
+```bash
+.venv/bin/python -m unittest discover -s tests -t .
+```
+
+**d. Edit `config.json`**
+- `security_firm`: `FUTUMY` for moomoo Malaysia. Use `FUTUSG` for Singapore, `FUTUINC` for the US, `FUTUAU` for Australia or `FUTUCA` for Canada.
+- `watchlist`: the stocks it may buy. The bot screens each one again before every buy.
+- `dry_run: true` makes the bot log orders without placing them.
+
+**e. Run in paper mode**
+```bash
+.venv/bin/python bot.py --loop
+```
+It trades once every weekday at 10:00 New York time (10 PM in Malaysia). Every order is written to `trades.csv`.
+
+**Emergency stop:** create an empty file named `STOP` in this folder and the bot does nothing. Delete the file to resume.
+
+## 4. Going live (real money)
+
+Only do this after weeks of paper trading you're happy with.
+1. In `config.json`, set `"mode": "live"` **and** `"i_understand_live_trading_uses_real_money": true`.
+2. Start the bot with your trading password in an environment variable. The password is never saved in a file:
+   ```bash
+   MOOMOO_TRADE_PASSWORD='your-trading-pin' .venv/bin/python bot.py --loop
+   ```
+
+## Files
+- `bot.py`: connects to OpenD and runs the daily pass: sells first, then buys.
+- `strategy.py`: buy/sell rules, position sizing and the backtest.
+- `screener.py`: Shariah screen and purification calculator.
+- `config.json`: all settings.
