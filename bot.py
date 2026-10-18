@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore")
 
 import moomoo as mm
 
+import db
 import screener
 from fx import usd_myr
 from strategy import Params, bot_capital, position_size, signal
@@ -33,8 +34,12 @@ MAX_DATA_AGE_DAYS = 7
 ACTIVE_ORDER_STATUSES = {"WAITING_SUBMIT", "SUBMITTING", "SUBMITTED", "FILLED_PART"}
 
 
+MODE = None  # set once the bot knows its mode, so stored log lines carry it
+
+
 def log(msg):
     print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+    db.insert("bot_events", {"mode": MODE, "message": str(msg)[:2000]})
 
 
 def load_json(path, default):
@@ -45,6 +50,9 @@ def load_json(path, default):
 
 
 def record_trade(row):
+    db.insert("trades", {"time": row["time"], "mode": row["mode"], "side": row["side"], "code": row["code"],
+                         "qty": row["qty"], "limit_price": row["limit"], "reason": row["reason"],
+                         "status": row["status"]})
     new = not TRADE_LOG.exists()
     with TRADE_LOG.open("a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(row))
@@ -60,6 +68,8 @@ class Bot:
         self.params = Params(**cfg["strategy"])
         self.market = cfg["market"]
         self.live = cfg["mode"] == "live"
+        global MODE
+        MODE = cfg["mode"]
         self.env = mm.TrdEnv.REAL if self.live else mm.TrdEnv.SIMULATE
         self.state = load_json(STATE_FILE, {})
 
@@ -155,7 +165,7 @@ class Bot:
             )
             status = f"order {data['order_id'][0]}" if ret == mm.RET_OK else f"ERROR {data}"
             log(f"  -> {status}")
-        record_trade({"time": dt.datetime.now().isoformat(timespec="seconds"),
+        record_trade({"time": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                       "mode": self.cfg["mode"], "side": side, "code": code, "qty": qty,
                       "limit": limit, "reason": reason, "status": status})
 
@@ -172,6 +182,7 @@ class Bot:
             if f.tell() == 0:
                 f.write("time,equity,cash\n")
             f.write(f"{dt.datetime.now().isoformat(timespec='seconds')},{equity:.2f},{cash:.2f}\n")
+        db.insert("equity_snapshots", {"mode": self.cfg["mode"], "equity": round(equity, 4), "cash": round(cash, 4)})
         if self.state.get("day") != today:
             self.state = {"day": today, "start_equity": equity}
         drop = 1 - equity / self.state["start_equity"] if self.state["start_equity"] else 0

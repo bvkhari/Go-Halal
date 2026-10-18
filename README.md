@@ -96,6 +96,13 @@ The bot can run 24/7 on a SovernStack SSH session (Ubuntu 22.04, CPU, 4 GB) inst
 - If the session restarts, log in to OpenD again, then run `start.sh`.
 - Never run the bot on your Mac and on the server at the same time. Both would place orders on the same account.
 
+## Supabase storage
+
+Trades, account snapshots and the bot's log are also saved to the Supabase project **Go Halal** (`ohncshmgjuesevhelnfg`, Singapore), in the tables `trades`, `equity_snapshots` and `bot_events`.
+- **Setup:** the schema is in `supabase/migrations/`. The bot reads `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` from `.env`, which is never committed.
+- **Access:** row-level security is on with no public policies, so only that secret key can read or write.
+- **If Supabase is down or not set up:** the bot keeps trading and still writes its local files.
+
 ## 4. Going live (real money)
 
 With `"fractional": true`, the bot buys fractional US shares from US$5 per order, so it works with small accounts such as RM500. To make it ignore money above a set amount, set `"budget_myr"` to that amount. `null` means the whole account.
@@ -118,6 +125,7 @@ Costs: fractional orders (under 1 share) pay no commission and a platform fee of
 - `strategy.py`: buy/sell rules, position sizing and the backtest.
 - `screener.py`: Shariah screen and purification calculator.
 - `dashboard.py` + `dashboard.html`: local web dashboard.
+- `db.py`: optional Supabase storage.
 - `fx.py`: USD/MYR exchange rate.
 - `controls.py`: dashboard controls (OpenD login, start/stop bot).
 - `insights.py`: the "How the bot decides" data for the dashboard.

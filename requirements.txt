@@ -2,3 +2,4 @@ moomoo-api
 yfinance
 pandas
 tzdata
+requests

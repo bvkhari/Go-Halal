@@ -7,3 +7,5 @@ STOP
 .DS_Store
 bot.log
 equity.csv
+.env
+supabase/.temp/
