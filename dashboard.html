@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go Halal Bot</title>
+<style>
+  :root {
+    --bg: #f6f7f5; --card: #ffffff; --ink: #1c2321; --muted: #6b7672; --line: #e3e7e4;
+    --accent: #1f7a55; --accent-soft: #e3f2ea; --bad: #b42318; --bad-soft: #fde8e6;
+    --warn: #9a6700; --warn-soft: #fff4d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111614; --card: #1a201e; --ink: #e8ece9; --muted: #95a19c; --line: #2a322f;
+      --accent: #4cc38a; --accent-soft: #173326; --bad: #f97066; --bad-soft: #3a1c1a;
+      --warn: #f5c451; --warn-soft: #362c12;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+          background: var(--line); color: var(--muted); }
+  .pill.ok { background: var(--accent-soft); color: var(--accent); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .spacer { flex: 1; }
+  .meta { color: var(--muted); font-size: 12px; }
+  button { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--card);
+           color: var(--ink); padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.danger { color: var(--bad); }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .grid .card { margin: 0; }
+  .kpi-label { color: var(--muted); font-size: 12px; }
+  .kpi { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .pos { color: var(--accent); } .neg { color: var(--bad); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  tr:last-child td { border-bottom: 0; }
+  .empty { color: var(--muted); padding: 8px 0; }
+  .log { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 280px; overflow: auto;
+         white-space: pre-wrap; color: var(--muted); }
+  .log b { color: var(--ink); font-weight: 600; }
+  .error { background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 12px 16px; margin-bottom: 12px; }
+  svg { display: block; width: 100%; height: 120px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Go Halal Bot</h1>
+    <div class="pills" id="pills"></div>
+    <div class="spacer"></div>
+    <span class="meta" id="updated"></span>
+    <button id="toggle"></button>
+  </header>
+
+  <div id="error"></div>
+
+  <div class="grid">
+    <div class="card"><div class="kpi-label">Account value</div><div class="kpi" id="k-total">–</div></div>
+    <div class="card"><div class="kpi-label">Cash</div><div class="kpi" id="k-cash">–</div></div>
+    <div class="card"><div class="kpi-label">Invested</div><div class="kpi" id="k-mv">–</div></div>
+    <div class="card"><div class="kpi-label">Unrealized profit / loss</div><div class="kpi" id="k-pl">–</div></div>
+  </div>
+
+  <div class="card" id="equity-card" hidden>
+    <h2>Account value over time</h2>
+    <svg id="equity" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="card"><h2>Holdings</h2><div class="scroll" id="positions"></div></div>
+  <div class="card"><h2>Today's orders at moomoo</h2><div class="scroll" id="orders"></div></div>
+  <div class="card"><h2>Bot decisions</h2><div class="scroll" id="trades"></div></div>
+  <div class="card"><h2>Bot log</h2><div class="log" id="log"></div></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = v => v == null || isNaN(v) ? "–" :
+  (v < 0 ? "-$" : "$") + Math.abs(+v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const signed = v => `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${v > 0 ? "+" : ""}${money(v)}</span>`;
+const pct = v => `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${v > 0 ? "+" : ""}${(+v).toFixed(2)}%</span>`;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const when = v => esc(String(v ?? "").replace("T", " ").slice(0, 16));
+let paused = false;
+
+function table(rows, cols, empty) {
+  if (!rows.length) return `<div class="empty">${empty}</div>`;
+  const head = cols.map(c => `<th class="${c.num ? "num" : ""}">${c.label}</th>`).join("");
+  const body = rows.map(r => "<tr>" + cols.map(c =>
+    `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.key], r) : esc(r[c.key])}</td>`).join("") + "</tr>").join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function drawEquity(points) {
+  const vals = points.map(p => +p.equity).filter(v => !isNaN(v));
+  $("equity-card").hidden = vals.length < 2;
+  if (vals.length < 2) return;
+  const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+  const xy = vals.map((v, i) => `${(i / (vals.length - 1)) * 600},${110 - ((v - min) / span) * 100}`);
+  const color = getComputedStyle(document.documentElement).getPropertyValue("--accent");
+  $("equity").innerHTML =
+    `<polyline points="0,120 ${xy.join(" ")} 600,120" fill="${color}" opacity=".12"/>` +
+    `<polyline points="${xy.join(" ")}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+}
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); }
+  catch { $("error").innerHTML = `<div class="error">Dashboard server isn't responding.</div>`; return; }
+  paused = s.paused;
+
+  const pills = [
+    s.mode === "live" ? `<span class="pill bad">LIVE · real money</span>` : `<span class="pill ok">PAPER trading</span>`,
+    s.dry_run ? `<span class="pill warn">Dry run</span>` : "",
+    s.running ? `<span class="pill ok">● Running</span>` : `<span class="pill bad">● Stopped</span>`,
+    s.paused ? `<span class="pill warn">Paused</span>` : "",
+    `<span class="pill">Next pass ${esc(s.next_run)}</span>`,
+  ];
+  $("pills").innerHTML = pills.join("");
+  $("updated").textContent = `Updated ${s.now}`;
+  $("toggle").textContent = s.paused ? "Resume bot" : "Pause bot";
+  $("toggle").className = s.paused ? "" : "danger";
+
+  const b = s.broker || {};
+  $("error").innerHTML = b.error ? `<div class="error">${esc(b.error)} — is OpenD open and logged in?</div>` : "";
+  if (b.account) {
+    $("k-total").textContent = money(b.account.total_assets);
+    $("k-cash").textContent = money(b.account.cash);
+    $("k-mv").textContent = money(b.account.market_val);
+    $("k-pl").innerHTML = signed(b.account.unrealized_pl);
+  }
+  $("positions").innerHTML = table(b.positions || [], [
+    {key: "code", label: "Stock", fmt: (v, r) => `<b>${esc(v.replace(/^\w+\./, ""))}</b> <span class="meta">${esc(r.stock_name)}</span>`},
+    {key: "qty", label: "Shares", num: true},
+    {key: "cost_price", label: "Avg cost", num: true, fmt: money},
+    {key: "nominal_price", label: "Price", num: true, fmt: money},
+    {key: "market_val", label: "Value", num: true, fmt: money},
+    {key: "today_pl_val", label: "Today", num: true, fmt: signed},
+    {key: "pl_val", label: "Total P/L", num: true, fmt: signed},
+    {key: "pl_ratio", label: "%", num: true, fmt: pct},
+  ], "No holdings yet. The bot buys at its next pass.");
+  $("orders").innerHTML = table(b.orders || [], [
+    {key: "create_time", label: "Time", fmt: when},
+    {key: "trd_side", label: "Side"},
+    {key: "code", label: "Stock"},
+    {key: "qty", label: "Qty", num: true},
+    {key: "price", label: "Limit", num: true, fmt: money},
+    {key: "dealt_qty", label: "Filled", num: true},
+    {key: "dealt_avg_price", label: "Fill price", num: true, fmt: v => +v ? money(v) : "–"},
+    {key: "order_status", label: "Status"},
+  ], "No orders today.");
+  $("trades").innerHTML = table(s.trades, [
+    {key: "time", label: "Time", fmt: when},
+    {key: "side", label: "Side", fmt: v => `<b class="${v === "BUY" ? "pos" : "neg"}">${esc(v)}</b>`},
+    {key: "code", label: "Stock"},
+    {key: "qty", label: "Qty", num: true},
+    {key: "limit", label: "Limit", num: true, fmt: money},
+    {key: "reason", label: "Why"},
+    {key: "status", label: "Result", fmt: v => v === "dry-run" ? `<span class="pill">Test only</span>` : esc(v)},
+  ], "The bot hasn't made any decisions yet.");
+  $("log").innerHTML = s.log.length
+    ? s.log.map(l => esc(l).replace(/\b(BUY|SELL)\b/g, "<b>$1</b>")).join("\n")
+    : "No log yet.";
+  drawEquity(s.equity);
+}
+
+$("toggle").onclick = async () => {
+  if (!paused && !confirm("Pause the bot? It will skip its daily passes until you resume.")) return;
+  await fetch(paused ? "/api/resume" : "/api/pause", {method: "POST"});
+  refresh();
+};
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>

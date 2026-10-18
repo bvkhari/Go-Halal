@@ -149,6 +149,11 @@ class Bot:
 
         equity, cash = self.account()
         today = dt.date.today().isoformat()
+        equity_log = HERE / "equity.csv"
+        with equity_log.open("a") as f:
+            if f.tell() == 0:
+                f.write("time,equity,cash\n")
+            f.write(f"{dt.datetime.now().isoformat(timespec='seconds')},{equity:.2f},{cash:.2f}\n")
         if self.state.get("day") != today:
             self.state = {"day": today, "start_equity": equity}
         drop = 1 - equity / self.state["start_equity"] if self.state["start_equity"] else 0

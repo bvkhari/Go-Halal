@@ -75,6 +75,12 @@ It trades once every weekday at 10:00 New York time (10 PM in Malaysia). Every o
 
 **Emergency stop:** create an empty file named `STOP` in this folder and the bot does nothing. Delete the file to resume.
 
+**Dashboard:** in a second terminal, run
+```bash
+.venv/bin/python dashboard.py
+```
+then open <http://127.0.0.1:8050>. It shows account value, holdings with profit/loss, today's orders, every bot decision and the live log, refreshing every 15 seconds. The **Pause bot** button creates the `STOP` file for you. It is only reachable from this Mac.
+
 ## 4. Going live (real money)
 
 Only do this after weeks of paper trading you're happy with.
@@ -88,4 +94,5 @@ Only do this after weeks of paper trading you're happy with.
 - `bot.py`: connects to OpenD and runs the daily pass: sells first, then buys.
 - `strategy.py`: buy/sell rules, position sizing and the backtest.
 - `screener.py`: Shariah screen and purification calculator.
+- `dashboard.py` + `dashboard.html`: local web dashboard.
 - `config.json`: all settings.
