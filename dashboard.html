@@ -111,11 +111,11 @@
 
   <div id="error"></div>
 
-  <div class="card">
-    <h2>Controls</h2>
+  <div class="card" id="controls-card" hidden>
+    <h2>Action needed</h2>
     <div class="controls">
-      <div class="ctl">
-        <h3>1 · moomoo OpenD <span class="pill" id="od-pill">checking…</span></h3>
+      <div class="ctl" id="ctl-opend">
+        <h3>moomoo OpenD <span class="pill" id="od-pill">checking…</span></h3>
         <p class="help" id="od-help"></p>
         <div class="console" id="od-console" aria-live="polite"></div>
         <button id="od-start" style="margin-top:8px">Start OpenD</button>
@@ -136,8 +136,8 @@
         </div>
         <div class="msg" id="od-msg"></div>
       </div>
-      <div class="ctl">
-        <h3>2 · Trading bot <span class="pill" id="bot-pill">checking…</span></h3>
+      <div class="ctl" id="ctl-bot">
+        <h3>Trading bot <span class="pill" id="bot-pill">checking…</span></h3>
         <p class="help" id="bot-help"></p>
         <form class="row" id="bot-form" autocomplete="off">
           <input id="bot-pin" type="password" inputmode="numeric" placeholder="Trading PIN" aria-label="moomoo trading PIN" autocomplete="off">
@@ -464,9 +464,23 @@ async function refreshOpenD() {
   $("od-account").hidden = !askAccount;
   $("od-password").hidden = !askPassword;
   $("od-sms-row").hidden = !askSms;
+  updateControlsVisibility();
 }
 
+// The panel only appears when something is asking for input:
+// OpenD needs a login / SMS code, or (once OpenD is logged in) the bot is stopped and needs starting.
+function updateControlsVisibility() {
+  if (!OD || LAST_STATUS == null) return;
+  const needOpenD = !OD.logged_in;
+  const needBot = OD.logged_in && !LAST_STATUS.running;
+  $("ctl-opend").hidden = !needOpenD;
+  $("ctl-bot").hidden = !needBot;
+  $("controls-card").hidden = !(needOpenD || needBot);
+}
+let LAST_STATUS = null;
+
 function renderBotControls(s) {
+  LAST_STATUS = s;
   LIVE = s.mode === "live"; RUNNING = s.running;
   $("bot-pill").className = "pill " + (RUNNING ? "ok" : "bad");
   $("bot-pill").textContent = RUNNING ? (LIVE ? "Running · LIVE" : "Running · paper") : "Stopped";
@@ -476,6 +490,7 @@ function renderBotControls(s) {
   $("bot-start").hidden = RUNNING;
   $("bot-stop").hidden = !RUNNING;
   $("bot-start").textContent = LIVE ? "Start live trading" : "Start bot";
+  updateControlsVisibility();
 }
 
 const odStep = async (kind, value = "") => {
