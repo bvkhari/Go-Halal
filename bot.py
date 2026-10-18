@@ -28,6 +28,7 @@ STATE_FILE = HERE / "state.json"
 TRADE_LOG = HERE / "trades.csv"
 STOP_FILE = HERE / "STOP"
 NY = ZoneInfo("America/New_York")
+MAX_DATA_AGE_DAYS = 7
 ACTIVE_ORDER_STATUSES = {"WAITING_SUBMIT", "SUBMITTING", "SUBMITTED", "FILLED_PART"}
 
 
@@ -88,14 +89,22 @@ class Bot:
 
     # ---------- market and account data ----------
     def closes(self, code):
-        start = (dt.date.today() - dt.timedelta(days=self.params.trend * 2)).isoformat()
-        ret, data, _ = self.quote.request_history_kline(code, start=start, ktype=mm.KLType.K_DAY, max_count=1000)
-        if ret == mm.RET_OK and len(data) > self.params.trend:
+        """Daily closes up to today, or [] if no fresh data (the stock is then skipped)."""
+        today = dt.date.today()
+        fresh = (today - dt.timedelta(days=MAX_DATA_AGE_DAYS)).isoformat()
+        start = (today - dt.timedelta(days=self.params.trend * 2)).isoformat()
+        # end= is required: without it moomoo returns one year from start, not up to today.
+        ret, data, _ = self.quote.request_history_kline(code, start=start, end=today.isoformat(),
+                                                        ktype=mm.KLType.K_DAY, max_count=1000)
+        if ret == mm.RET_OK and len(data) > self.params.trend and data["time_key"].iloc[-1][:10] >= fresh:
             return data["close"].tolist()
         # Fallback when OpenD lacks the quote permission for this market.
         import yfinance as yf
         hist = yf.Ticker(code.split(".", 1)[1]).history(period="2y")
-        return hist["Close"].tolist()
+        if len(hist) and hist.index[-1].strftime("%Y-%m-%d") >= fresh:
+            return hist["Close"].tolist()
+        log(f"skip {code}: no price data from the last {MAX_DATA_AGE_DAYS} days")
+        return []
 
     def last_prices(self, codes):
         ret, data = self.quote.get_market_snapshot(codes)
@@ -176,7 +185,10 @@ class Bot:
             if not check.compliant:
                 reason = "no longer Shariah compliant: " + "; ".join(check.reasons)
             else:
-                action = signal(self.closes(code), self.params, cost_price=float(pos.cost_price))
+                closes = self.closes(code)
+                if not closes:
+                    continue
+                action = signal(closes, self.params, cost_price=float(pos.cost_price))
                 if action != "SELL":
                     continue
                 reason = "exit signal / stop loss"
@@ -195,7 +207,8 @@ class Bot:
                 break
             if code in held or code in busy or code not in prices:
                 continue
-            if signal(self.closes(code), self.params) != "BUY":
+            closes = self.closes(code)
+            if not closes or signal(closes, self.params) != "BUY":
                 continue
             check = screener.screen(code)
             if not check.compliant:
