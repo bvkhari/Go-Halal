@@ -54,6 +54,31 @@
   .log b { color: var(--ink); font-weight: 600; }
   .error { background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 12px 16px; margin-bottom: 12px; }
   svg { display: block; width: 100%; height: 120px; }
+
+  :root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --grid: #e9ece9; }
+  @media (prefers-color-scheme: dark) { :root { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --grid: #262d2a; } }
+  .pipeline { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin-bottom: 8px; }
+  .step { flex: 1 1 140px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .step .n { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .step .t { color: var(--muted); font-size: 12px; }
+  .arrow { align-self: center; color: var(--muted); }
+  .rules { color: var(--muted); font-size: 12px; margin: 4px 0 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin: 6px 0 10px; }
+  .key { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  .stocks { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .stock { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; background: var(--card); text-align: left; font: inherit; color: inherit; }
+  .stock:hover, .stock.sel { border-color: var(--muted); }
+  .stock .top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .stock .why { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 2.9em; }
+  .stock svg { height: 44px; margin-top: 6px; }
+  .detail { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .detail h3 { margin: 0 0 4px; font-size: 18px; }
+  .checks { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .checks li { font-size: 13px; }
+  .chartwrap { position: relative; }
+  .chartwrap svg { height: 300px; }
+  .tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); white-space: nowrap; display: none; font-variant-numeric: tabular-nums; }
+  .axis { fill: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -75,6 +100,15 @@
     <div class="card"><div class="kpi-label">Unrealized profit / loss</div><div class="kpi" id="k-pl">–</div></div>
   </div>
 
+
+  <div class="card">
+    <h2>How the bot decides <span class="meta" id="wl-updated"></span></h2>
+    <div class="pipeline" id="pipeline"><div class="empty">Working out today's decisions… this takes about a minute after the dashboard starts.</div></div>
+    <div class="rules" id="rules"></div>
+    <div class="legend"><span><i class="key" style="background:var(--s1)"></i>Price</span><span><i class="key" style="background:var(--s4)"></i>200-day average (long-term trend)</span></div>
+    <div class="stocks" id="stocks"></div>
+    <div class="detail" id="detail" hidden></div>
+  </div>
   <div class="card" id="equity-card" hidden>
     <h2>Account value over time</h2>
     <svg id="equity" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
@@ -121,6 +155,8 @@ async function refresh() {
   try { s = await (await fetch("/api/status")).json(); }
   catch { $("error").innerHTML = `<div class="error">Dashboard server isn't responding.</div>`; return; }
   paused = s.paused;
+  lastTrades = s.trades || [];
+  if (s.risk) CFG = s.risk;
 
   const pills = [
     s.mode === "live" ? `<span class="pill bad">LIVE · real money</span>` : `<span class="pill ok">PAPER trading</span>`,
@@ -182,6 +218,145 @@ $("toggle").onclick = async () => {
   await fetch(paused ? "/api/resume" : "/api/pause", {method: "POST"});
   refresh();
 };
+
+// ---------- How the bot decides ----------
+const VERDICT = {
+  BUY: ["ok", "Buy"], SELL: ["bad", "Sell"], HOLD: ["", "Hold"], BLOCKED: ["warn", "Not halal"], FULL: ["", "Queued"],
+};
+let WL = null, selected = null, lastTrades = [];
+const pctTxt = v => v == null ? "n/a" : (v * 100).toFixed(1) + "%";
+
+function why(st, p) {
+  if (!st.compliant) return "Fails Shariah screen: " + st.screen_reasons.join("; ");
+  const c = st.checks;
+  if (st.held) {
+    if (c.stop_hit) return `Price fell ${Math.round(p.stop_loss_pct * 100)}% below what we paid: stop-loss.`;
+    if (st.action === "SELL") return !c.fast_above_slow ? "Short-term trend turned down." : "Price dropped below its long-term trend.";
+    return "Owned. Trend still up, keep holding.";
+  }
+  if (st.action === "BUY") return "Uptrend confirmed on both checks: buy at next pass.";
+  if (st.action === "FULL") return `Uptrend, but the bot already fills its ${CFG.max_open_positions} stock limit with stocks earlier in the watchlist.`;
+  if (!c.price_above_trend) return "Price is below its 200-day average: waiting.";
+  return `${p.fast}-day average is below the ${p.slow}-day: waiting.`;
+}
+
+function spark(st) {
+  const vals = st.close.concat(st.trend.filter(v => v != null));
+  const min = Math.min(...vals), max = Math.max(...vals), n = st.close.length;
+  const pt = (v, i) => `${(i / (n - 1)) * 200},${42 - ((v - min) / (max - min || 1)) * 40}`;
+  const line = (arr, color) => `<polyline points="${arr.map((v, i) => v == null ? null : pt(v, i)).filter(Boolean).join(" ")}" fill="none" stroke="var(${color})" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>`;
+  return `<svg viewBox="0 0 200 44" preserveAspectRatio="none" aria-hidden="true">${line(st.trend, "--s4")}${line(st.close, "--s1")}</svg>`;
+}
+
+function renderWatchlist() {
+  if (!WL || WL.status === "loading") return;
+  if (!WL.stocks || !WL.stocks.length) {
+    $("pipeline").innerHTML = `<div class="empty">${esc(WL.status)}</div>`; return;
+  }
+  const p = WL.params, S = WL.stocks;
+  // Mirror the bot: it buys in watchlist order until the position limit is reached.
+  let slots = CFG.max_open_positions - S.filter(s => s.held).length;
+  S.forEach(s => { if (s.action === "FULL") s.action = "BUY"; if (s.action === "BUY" && !s.held) { if (slots > 0) slots--; else s.action = "FULL"; } });
+  const halal = S.filter(s => s.compliant);
+  const up = halal.filter(s => s.checks.fast_above_slow && s.checks.price_above_trend);
+  const count = a => S.filter(s => s.action === a).length;
+  const step = (n, t) => `<div class="step"><div class="n">${n}</div><div class="t">${t}</div></div>`;
+  const arrow = `<div class="arrow" aria-hidden="true">→</div>`;
+  $("pipeline").innerHTML =
+    step(S.length, "stocks watched") + arrow +
+    step(halal.length, "pass the Shariah screen") + arrow +
+    step(up.length, `in an uptrend (${p.fast}d > ${p.slow}d avg, price > ${p.trend}d avg)`) + arrow +
+    step(`${count("BUY")} · ${count("SELL")}`, `buy · sell at the next pass${count("FULL") ? ` (${count("FULL")} more uptrends wait for a free slot)` : ""}`);
+  $("rules").textContent = `Then the risk rules: cash only, at most ${Math.round(CFG.max_position_pct * 100)}% of the account per stock, at most ${CFG.max_open_positions} stocks, ${Math.round(p.stop_loss_pct * 100)}% stop-loss. Recalculated every 15 min, last at ${WL.updated}.`;
+  const order = {SELL: 0, BUY: 1, FULL: 2, HOLD: 3, BLOCKED: 4};
+  const sorted = [...S].sort((a, b) => (b.held - a.held) || (order[a.action] - order[b.action]) || a.ticker.localeCompare(b.ticker));
+  $("stocks").innerHTML = sorted.map(st => {
+    const [cls, label] = VERDICT[st.action] || ["", st.action];
+    return `<button class="stock ${st.code === selected ? "sel" : ""}" data-code="${esc(st.code)}">
+      <div class="top"><b>${esc(st.ticker)}</b><span class="pill ${cls}">${label}</span></div>
+      <div class="meta">${money(st.price)}${st.held ? " · owned" : ""}</div>
+      ${spark(st)}
+      <div class="why">${esc(why(st, p))}</div></button>`;
+  }).join("");
+  document.querySelectorAll(".stock").forEach(b => b.onclick = () => {
+    selected = selected === b.dataset.code ? null : b.dataset.code; renderWatchlist();
+  });
+  renderDetail();
+}
+
+function renderDetail() {
+  const st = WL && WL.stocks.find(s => s.code === selected);
+  $("detail").hidden = !st;
+  if (!st) return;
+  const p = WL.params, c = st.checks, r = st.ratios;
+  const mark = ok => ok ? `<span class="pos">✓</span>` : `<span class="neg">✗</span>`;
+  $("detail").innerHTML = `
+    <h3>${esc(st.ticker)} <span class="pill ${(VERDICT[st.action] || [""])[0]}">${(VERDICT[st.action] || ["", st.action])[1]}</span></h3>
+    <div class="meta">${esc(why(st, p))}</div>
+    <div class="legend">
+      <span><i class="key" style="background:var(--s1)"></i>Price</span>
+      <span><i class="key" style="background:var(--s2)"></i>${p.fast}-day average</span>
+      <span><i class="key" style="background:var(--s3)"></i>${p.slow}-day average</span>
+      <span><i class="key" style="background:var(--s4)"></i>${p.trend}-day average</span>
+      <span>▲ bot bought · ▼ bot sold</span>
+    </div>
+    <div class="chartwrap"><svg id="big" viewBox="0 0 800 300" preserveAspectRatio="none" role="img" aria-label="${esc(st.ticker)} price and moving averages"></svg><div class="tip" id="tip"></div></div>
+    <ul class="checks">
+      <li>${mark(st.compliant)} Shariah screen ${st.compliant ? "passed" : "failed"} · debt ${pctTxt(r.debt)}, cash ${pctTxt(r.cash)}, interest income ${pctTxt(r.interest)} (limits 30% / 30% / 5%)</li>
+      <li>${mark(c.fast_above_slow)} ${p.fast}-day avg ${money(st.sma.fast)} ${c.fast_above_slow ? "above" : "below"} ${p.slow}-day avg ${money(st.sma.slow)}</li>
+      <li>${mark(c.price_above_trend)} Price ${money(st.price)} ${c.price_above_trend ? "above" : "below"} ${p.trend}-day avg ${money(st.sma.trend)}</li>
+      ${st.held ? `<li>${mark(!c.stop_hit)} Stop-loss at ${money(st.cost * (1 - p.stop_loss_pct))} (bought at ${money(st.cost)})</li>` : ""}
+    </ul>`;
+  drawBig(st);
+}
+
+function drawBig(st) {
+  const W = 800, H = 300, L = 8, R = 56, T = 10, B = 24, n = st.close.length;
+  const all = [st.close, st.fast, st.slow, st.trend].flat().filter(v => v != null);
+  const min = Math.min(...all), max = Math.max(...all), pad = (max - min) * 0.05 || 1;
+  const lo = min - pad, hi = max + pad;
+  const x = i => L + (i / (n - 1)) * (W - L - R), y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const ticks = [0, 1, 2, 3].map(k => lo + (hi - lo) * (k + 0.5) / 4);
+  let svg = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <text class="axis" x="${W - R + 6}" y="${y(v) + 4}">${v >= 100 ? v.toFixed(0) : v.toFixed(2)}</text>`).join("");
+  [0, Math.floor(n / 2), n - 1].forEach((i, k) => {
+    svg += `<text class="axis" x="${x(i)}" y="${H - 6}" text-anchor="${["start", "middle", "end"][k]}">${esc(st.dates[i])}</text>`;
+  });
+  const line = (arr, color) => `<polyline points="${arr.map((v, i) => v == null ? null : `${x(i)},${y(v)}`).filter(Boolean).join(" ")}" fill="none" stroke="var(${color})" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>`;
+  svg += line(st.trend, "--s4") + line(st.slow, "--s3") + line(st.fast, "--s2") + line(st.close, "--s1");
+  // Real (non test-only) trades the bot made in this stock
+  lastTrades.filter(t => t.code === st.code && t.status !== "dry-run").forEach(t => {
+    const i = st.dates.indexOf(String(t.time).slice(0, 10));
+    if (i < 0) return;
+    const buy = t.side === "BUY", cx = x(i), cy = y(st.close[i]) + (buy ? 12 : -12);
+    const tri = buy ? `${cx},${cy - 6} ${cx - 6},${cy + 5} ${cx + 6},${cy + 5}` : `${cx},${cy + 6} ${cx - 6},${cy - 5} ${cx + 6},${cy - 5}`;
+    svg += `<polygon points="${tri}" fill="var(${buy ? "--accent" : "--bad"})" stroke="var(--card)" stroke-width="2"/>`;
+  });
+  svg += `<line id="xh" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" vector-effect="non-scaling-stroke" visibility="hidden"/>
+    <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" id="hit"/>`;
+  const big = $("big"); big.innerHTML = svg;
+  const tip = $("tip"), xh = big.querySelector("#xh");
+  big.querySelector("#hit").onmousemove = e => {
+    const box = big.getBoundingClientRect(), fx = (e.clientX - box.left) / box.width * W;
+    const i = Math.max(0, Math.min(n - 1, Math.round((fx - L) / (W - L - R) * (n - 1))));
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
+    const row = (c, name, v) => v == null ? "" : `<div><i class="key" style="background:var(${c})"></i>${name} <b>${money(v)}</b></div>`;
+    tip.innerHTML = `<div class="meta">${esc(st.dates[i])}</div>` + row("--s1", "Price", st.close[i]) +
+      row("--s2", `${WL.params.fast}d`, st.fast[i]) + row("--s3", `${WL.params.slow}d`, st.slow[i]) + row("--s4", `${WL.params.trend}d`, st.trend[i]);
+    tip.style.display = "block";
+    const px = (x(i) / W) * box.width;
+    tip.style.left = Math.min(px + 12, box.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
+  };
+  big.querySelector("#hit").onmouseleave = () => { tip.style.display = "none"; xh.setAttribute("visibility", "hidden"); };
+}
+
+let CFG = {max_position_pct: 0.1, max_open_positions: 8};
+async function refreshWatchlist() {
+  try { WL = await (await fetch("/api/watchlist")).json(); renderWatchlist(); } catch {}
+}
+refreshWatchlist();
+setInterval(refreshWatchlist, 60000);
+
 refresh();
 setInterval(refresh, 15000);
 </script>

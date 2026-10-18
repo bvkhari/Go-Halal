@@ -18,6 +18,8 @@ warnings.filterwarnings("ignore")
 
 import moomoo as mm
 
+from insights import Insights
+
 HERE = Path(__file__).parent
 CFG = json.loads((HERE / "config.json").read_text())
 STOP_FILE = HERE / "STOP"
@@ -106,6 +108,7 @@ def status():
     lines = log.read_text(errors="replace").splitlines()[-40:] if log.exists() else []
     return {
         "mode": CFG["mode"], "dry_run": CFG["dry_run"], "running": bot_running(),
+        "risk": CFG["risk"],
         "paused": STOP_FILE.exists(), "next_run": next_run(),
         "now": dt.datetime.now().strftime("%H:%M:%S"),
         "broker": broker_snapshot(),
@@ -127,6 +130,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/status":
             self._send(json.dumps(status(), default=str))
+        elif self.path == "/api/watchlist":
+            self._send(json.dumps(INSIGHTS.data, default=str))
         elif self.path in ("/", "/index.html"):
             self._send((HERE / "dashboard.html").read_text(), "text/html; charset=utf-8")
         else:
@@ -146,5 +151,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    INSIGHTS = Insights(CFG)
     print(f"Go Halal dashboard: http://127.0.0.1:{PORT}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
